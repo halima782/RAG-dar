@@ -19,9 +19,13 @@ export default function ConversationSidebar({
   onDelete,
 }) {
   return (
-    <aside className="w-72 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col">
+    <aside
+      data-tour="sidebar"
+      className="w-72 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col"
+    >
       <div className="p-4 border-b border-gray-200">
         <button
+          data-tour="new-chat"
           onClick={onNew}
           className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
         >

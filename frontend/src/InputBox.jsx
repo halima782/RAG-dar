@@ -10,7 +10,7 @@ export default function InputBox({ onSend, disabled }) {
   };
 
   return (
-    <div className="flex gap-2 mt-4">
+    <div data-tour="chat-input" className="flex gap-2 mt-4">
       <input
         className="flex-1 border p-2 rounded disabled:bg-gray-100 disabled:cursor-not-allowed"
         value={text}
