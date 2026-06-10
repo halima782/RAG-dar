@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { streamChat } from "./api/chat";
 import { fetchMessages, mapApiMessage } from "./api/conversations";
+import { useAutoScroll } from "./hooks/useAutoScroll";
 import Message from "./Message";
 import InputBox from "./InputBox";
 
@@ -13,11 +14,11 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
   const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const messagesEndRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const { containerRef, handleScroll, enableAutoScroll } = useAutoScroll(
+    messages,
+    !isLoadingHistory
+  );
 
   useEffect(() => {
     if (!conversationId) return;
@@ -49,7 +50,6 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
       } finally {
         if (!cancelled) {
           setIsLoadingHistory(false);
-          scrollToBottom();
         }
       }
     }
@@ -76,6 +76,8 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
     const question = input.trim();
     if (!question || isLoading || !conversationId) return;
 
+    enableAutoScroll();
+
     const userMsg = { role: "user", text: question };
     const aiPlaceholder = { role: "ai", text: "", isThinking: true };
 
@@ -85,7 +87,6 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
     await streamChat(conversationId, question, {
       onThinking: () => {
         updateLastAiMessage((msg) => ({ ...msg, isThinking: true }));
-        scrollToBottom();
       },
       onToken: (token) => {
         updateLastAiMessage((msg) => ({
@@ -94,7 +95,6 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
           isThinking: false,
           isStreaming: true,
         }));
-        scrollToBottom();
       },
       onDone: () => {
         updateLastAiMessage((msg) => ({
@@ -104,7 +104,6 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
         }));
         setIsLoading(false);
         onTitleUpdate?.(conversationId, question);
-        scrollToBottom();
       },
       onError: (error) => {
         updateLastAiMessage((msg) => ({
@@ -115,7 +114,6 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
           isError: true,
         }));
         setIsLoading(false);
-        scrollToBottom();
       },
     });
   };
@@ -130,7 +128,11 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden p-4">
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto scroll-smooth"
+      >
         {isLoadingHistory ? (
           <p className="text-sm text-gray-500 text-center py-8">Loading messages...</p>
         ) : (
@@ -145,7 +147,6 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
             />
           ))
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       <InputBox onSend={handleSend} disabled={isLoading || isLoadingHistory} />
