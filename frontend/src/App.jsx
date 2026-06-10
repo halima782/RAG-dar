@@ -6,7 +6,9 @@ import {
 } from "./api/conversations";
 import ChatBox from "./ChatBox";
 import ConversationSidebar from "./components/ConversationSidebar";
+import GuidedTour from "./components/GuidedTour";
 import Header from "./Header";
+import { useGuidedTour } from "./hooks/useGuidedTour";
 
 function truncateTitle(text, max = 50) {
   const trimmed = text.trim();
@@ -18,6 +20,9 @@ export default function App() {
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [isLoadingList, setIsLoadingList] = useState(true);
+  const { isOpen, startTour, closeTour, completeTour } = useGuidedTour({
+    ready: !isLoadingList,
+  });
 
   const loadConversations = useCallback(async () => {
     const data = await fetchConversations();
@@ -116,7 +121,8 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col">
-      <Header />
+      <Header onStartTour={startTour} />
+      <GuidedTour isOpen={isOpen} onClose={closeTour} onComplete={completeTour} />
       <div className="flex flex-1 overflow-hidden">
         <ConversationSidebar
           conversations={conversations}

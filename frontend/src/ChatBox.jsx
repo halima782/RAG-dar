@@ -130,6 +130,7 @@ export default function ChatBox({ conversationId, onTitleUpdate }) {
     <div className="flex-1 flex flex-col overflow-hidden p-4">
       <div
         ref={containerRef}
+        data-tour="chat-area"
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto scroll-smooth"
       >
