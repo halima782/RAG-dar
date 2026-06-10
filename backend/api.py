@@ -70,7 +70,7 @@ def create_conversation():
 def get_conversations():
     conversations = []
 
-    for c in conversations_collection.find():
+    for c in conversations_collection.find().sort("createdAt", -1):
         conversations.append({
             "id": str(c["_id"]),
             "title": c["title"],
@@ -96,7 +96,7 @@ def delete_conversation(conv_id: str):
 @router.get("/api/messages/{conversation_id}")
 def get_messages(conversation_id: str):
 
-    msgs = messages_collection.find({"conversationId": conversation_id})
+    msgs = messages_collection.find({"conversationId": conversation_id}).sort("timestamp", 1)
 
     return [
         {
@@ -133,6 +133,12 @@ def chat_stream(request: ChatRequest):
         "content": question,
         "timestamp": datetime.utcnow()
     })
+
+    title = question if len(question) <= 50 else f"{question[:50]}..."
+    conversations_collection.update_one(
+        {"_id": ObjectId(conversation_id), "title": "New Chat"},
+        {"$set": {"title": title}},
+    )
 
     def event_generator():
         yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
