@@ -1,18 +1,65 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { streamChat } from "./api/chat";
+import { fetchMessages, mapApiMessage } from "./api/conversations";
 import Message from "./Message";
 import InputBox from "./InputBox";
 
-export default function ChatBox() {
-  const [messages, setMessages] = useState([
-    { role: "ai", text: "Hello! I am your local AI. Ask me anything about your documents." },
-  ]);
+const WELCOME_MESSAGE = {
+  role: "ai",
+  text: "Hello! I am your local AI. Ask me anything about your documents.",
+};
+
+export default function ChatBox({ conversationId, onTitleUpdate }) {
+  const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
+
+  useEffect(() => {
+    if (!conversationId) return;
+
+    let cancelled = false;
+
+    async function loadHistory() {
+      setIsLoadingHistory(true);
+
+      try {
+        const data = await fetchMessages(conversationId);
+        if (cancelled) return;
+
+        if (data.length === 0) {
+          setMessages([WELCOME_MESSAGE]);
+        } else {
+          setMessages(data.map(mapApiMessage));
+        }
+      } catch {
+        if (!cancelled) {
+          setMessages([
+            {
+              role: "ai",
+              text: "Could not load conversation history. You can still send a new message.",
+              isError: true,
+            },
+          ]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+          scrollToBottom();
+        }
+      }
+    }
+
+    loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId]);
 
   const updateLastAiMessage = (updater) => {
     setMessages((prev) => {
@@ -27,7 +74,7 @@ export default function ChatBox() {
 
   const handleSend = async (input) => {
     const question = input.trim();
-    if (!question || isLoading) return;
+    if (!question || isLoading || !conversationId) return;
 
     const userMsg = { role: "user", text: question };
     const aiPlaceholder = { role: "ai", text: "", isThinking: true };
@@ -35,7 +82,7 @@ export default function ChatBox() {
     setMessages((prev) => [...prev, userMsg, aiPlaceholder]);
     setIsLoading(true);
 
-    await streamChat(question, {
+    await streamChat(conversationId, question, {
       onThinking: () => {
         updateLastAiMessage((msg) => ({ ...msg, isThinking: true }));
         scrollToBottom();
@@ -56,6 +103,7 @@ export default function ChatBox() {
           isStreaming: false,
         }));
         setIsLoading(false);
+        onTitleUpdate?.(conversationId, question);
         scrollToBottom();
       },
       onError: (error) => {
@@ -72,23 +120,35 @@ export default function ChatBox() {
     });
   };
 
+  if (!conversationId) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-500">
+        Select or start a conversation
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden p-4">
       <div className="flex-1 overflow-y-auto">
-        {messages.map((m, i) => (
-          <Message
-            key={i}
-            role={m.role}
-            text={m.text}
-            isThinking={m.isThinking}
-            isStreaming={m.isStreaming}
-            isError={m.isError}
-          />
-        ))}
+        {isLoadingHistory ? (
+          <p className="text-sm text-gray-500 text-center py-8">Loading messages...</p>
+        ) : (
+          messages.map((m, i) => (
+            <Message
+              key={m.id ?? i}
+              role={m.role}
+              text={m.text}
+              isThinking={m.isThinking}
+              isStreaming={m.isStreaming}
+              isError={m.isError}
+            />
+          ))
+        )}
         <div ref={messagesEndRef} />
       </div>
 
-      <InputBox onSend={handleSend} disabled={isLoading} />
+      <InputBox onSend={handleSend} disabled={isLoading || isLoadingHistory} />
     </div>
   );
 }

@@ -1,13 +1,13 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
-export async function streamChat(question, { onThinking, onToken, onDone, onError }) {
+export async function streamChat(conversationId, question, { onThinking, onToken, onDone, onError }) {
   let response;
 
   try {
     response = await fetch(`${API_BASE}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ conversation_id: conversationId, question }),
     });
   } catch (error) {
     onError?.(error);
