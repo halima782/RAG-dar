@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createConversation,
   deleteConversation,
   fetchConversations,
 } from "./api/conversations";
 import ChatBox from "./ChatBox";
+import ConfirmDialog from "./components/ConfirmDialog";
 import ConversationSidebar from "./components/ConversationSidebar";
 import GuidedTour from "./components/GuidedTour";
 import Header from "./Header";
@@ -20,6 +21,10 @@ export default function App() {
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [isLoadingList, setIsLoadingList] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const headerRef = useRef(null);
   const { isOpen, startTour, closeTour, completeTour } = useGuidedTour({
     ready: !isLoadingList,
   });
@@ -33,6 +38,7 @@ export default function App() {
   useEffect(() => {
     async function init() {
       setIsLoadingList(true);
+      setLoadError(null);
 
       try {
         let data = await loadConversations();
@@ -52,6 +58,7 @@ export default function App() {
         setActiveId(data[0].id);
       } catch (error) {
         console.error("Failed to load conversations:", error);
+        setLoadError(error.message || "Could not connect to the backend.");
       } finally {
         setIsLoadingList(false);
       }
@@ -61,6 +68,7 @@ export default function App() {
   }, [loadConversations]);
 
   const handleNewChat = async () => {
+    setSidebarOpen(false);
     try {
       const created = await createConversation();
       const newConv = {
@@ -78,9 +86,50 @@ export default function App() {
 
   const handleSelect = (id) => {
     setActiveId(id);
+    setSidebarOpen(false);
   };
 
-  const handleDelete = async (id) => {
+  useEffect(() => {
+    const updateHeaderOffset = () => {
+      const height = headerRef.current?.offsetHeight ?? 0;
+      document.documentElement.style.setProperty("--header-offset", `${height}px`);
+    };
+
+    updateHeaderOffset();
+    window.addEventListener("resize", updateHeaderOffset);
+
+    return () => window.removeEventListener("resize", updateHeaderOffset);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [sidebarOpen]);
+
+  const handleDeleteRequest = (id) => {
+    const conversation = conversations.find((c) => c.id === id);
+    setDeleteTarget({
+      id,
+      title: conversation?.title ?? "this chat",
+    });
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteTarget(null);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+
+    const { id } = deleteTarget;
+    setDeleteTarget(null);
+
     try {
       await deleteConversation(id);
 
@@ -120,23 +169,66 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen flex flex-col">
-      <Header onStartTour={startTour} />
+    <div className="app-shell h-screen flex flex-col min-h-0">
+      <div ref={headerRef}>
+        <Header
+          onStartTour={startTour}
+          sidebarOpen={sidebarOpen}
+          onMenuToggle={() => setSidebarOpen((open) => !open)}
+        />
+      </div>
       <GuidedTour isOpen={isOpen} onClose={closeTour} onComplete={completeTour} />
-      <div className="flex flex-1 overflow-hidden">
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        title={`Delete "${deleteTarget?.title}"?`}
+        message="This conversation and all its messages will be permanently removed. This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+      />
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
+        {sidebarOpen && (
+          <button
+            type="button"
+            className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+            style={{ top: "var(--header-offset, 0px)" }}
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close chat history"
+          />
+        )}
+
         <ConversationSidebar
           conversations={conversations}
           activeId={activeId}
           isLoading={isLoadingList}
+          isOpen={sidebarOpen}
           onSelect={handleSelect}
           onNew={handleNewChat}
-          onDelete={handleDelete}
+          onDelete={handleDeleteRequest}
+          onClose={() => setSidebarOpen(false)}
         />
-        <ChatBox
-          key={activeId}
-          conversationId={activeId}
-          onTitleUpdate={handleTitleUpdate}
-        />
+        {loadError ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 text-center min-w-0">
+            <p className="text-red-600 font-medium mb-2">Cannot connect to backend</p>
+            <p className="text-gray-600 text-sm max-w-md mb-4">{loadError}</p>
+            <p className="text-gray-500 text-sm">
+              Start the backend:{" "}
+              <code className="block sm:inline mt-2 sm:mt-0 bg-gray-100 px-2 py-1 rounded text-xs sm:text-sm break-all">
+                uvicorn api:app --reload --port 8000
+              </code>
+            </p>
+          </div>
+        ) : (
+          <ChatBox
+            key={activeId}
+            conversationId={activeId}
+            conversationTitle={
+              conversations.find((conversation) => conversation.id === activeId)?.title
+            }
+            onTitleUpdate={handleTitleUpdate}
+          />
+        )}
       </div>
     </div>
   );
