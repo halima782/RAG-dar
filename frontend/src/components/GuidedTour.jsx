@@ -139,7 +139,7 @@ export default function GuidedTour({ isOpen, onClose, onComplete }) {
 
       <div
         ref={setTooltipRef}
-        className="absolute z-10 w-80 bg-white rounded-xl shadow-2xl p-5 transition-all duration-300"
+        className="absolute z-10 w-[calc(100vw-2rem)] max-w-sm sm:w-80 bg-white rounded-xl shadow-2xl p-4 sm:p-5 transition-all duration-300"
         style={{ top: tooltipPos.top, left: tooltipPos.left }}
       >
         <p className="text-xs font-medium text-blue-500 mb-1">
@@ -148,15 +148,15 @@ export default function GuidedTour({ isOpen, onClose, onComplete }) {
         <h3 className="text-lg font-semibold text-gray-900 mb-2">{step.title}</h3>
         <p className="text-sm text-gray-600 leading-relaxed">{step.content}</p>
 
-        <div className="flex items-center justify-between mt-5 gap-2">
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between mt-5 gap-3 sm:gap-2">
           <button
             onClick={handleSkip}
-            className="text-sm text-gray-500 hover:text-gray-700 px-2 py-1"
+            className="text-sm text-gray-500 hover:text-gray-700 px-2 py-1 self-start sm:self-auto"
           >
             Skip tour
           </button>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 w-full sm:w-auto">
             {!isFirst && (
               <button
                 onClick={handleBack}
@@ -167,7 +167,7 @@ export default function GuidedTour({ isOpen, onClose, onComplete }) {
             )}
             <button
               onClick={handleNext}
-              className="text-sm font-medium px-4 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600"
+              className="text-sm font-medium px-4 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600 flex-1 sm:flex-none"
             >
               {isLast ? "Done" : "Next"}
             </button>

@@ -10,6 +10,12 @@ db = client[DB_NAME]
 
 conversations_collection = db["conversations"]
 messages_collection = db["messages"]
+feedback_collection = db["feedback"]
 
 conversations_collection.create_index([("createdAt", DESCENDING)])
 messages_collection.create_index([("conversationId", ASCENDING), ("timestamp", ASCENDING)])
+feedback_collection.create_index(
+    [("messageId", ASCENDING), ("versionIndex", ASCENDING)],
+    unique=True,
+)
+feedback_collection.create_index([("conversationId", ASCENDING), ("createdAt", DESCENDING)])

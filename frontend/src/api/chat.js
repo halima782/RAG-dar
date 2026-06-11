@@ -1,13 +1,22 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
-export async function streamChat(conversationId, question, { onThinking, onToken, onDone, onError }) {
+export async function streamChat(
+  conversationId,
+  question,
+  { regenerate = false, replaceMessageId = null, onThinking, onToken, onCitations, onDone, onError } = {}
+) {
   let response;
 
   try {
     response = await fetch(`${API_BASE}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: conversationId, question }),
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        question,
+        regenerate,
+        replace_message_id: replaceMessageId,
+      }),
     });
   } catch (error) {
     onError?.(error);
@@ -46,8 +55,14 @@ export async function streamChat(conversationId, question, { onThinking, onToken
           onThinking?.();
         } else if (data.token) {
           onToken?.(data.token);
+        } else if (data.citations) {
+          onCitations?.(data.citations);
         } else if (data.done) {
-          onDone?.();
+          onDone?.({
+            messageId: data.messageId,
+            versions: data.versions,
+            activeVersionIndex: data.activeVersionIndex,
+          });
         }
       }
     }
