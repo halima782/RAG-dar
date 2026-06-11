@@ -43,3 +43,12 @@ export function fetchFeedback({ conversationId, messageId } = {}) {
     return response.json();
   });
 }
+
+export function fetchFeedbackDashboard() {
+  return fetch(`${API_BASE}/api/feedback/dashboard`).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`Failed to load feedback dashboard (${response.status})`);
+    }
+    return response.json();
+  });
+}

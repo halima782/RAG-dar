@@ -1,4 +1,5 @@
 import os
+import random
 import re
 from threading import Thread
 
@@ -46,14 +47,23 @@ def expand_query(question: str) -> str:
     return question
 
 
-def get_rag_data(question: str, k: int = 5):
+def get_rag_data(question: str, k: int = 5, regenerate: bool = False):
     if "implementation group" in question.lower():
         k = max(k, 8)
-    docs = retrieve(expand_query(question), k=k)
+
+    fetch_k = k + 6 if regenerate else k
+    docs = retrieve(expand_query(question), k=fetch_k)
+
+    if regenerate and len(docs) > k:
+        offset = random.randint(0, min(3, len(docs) - k))
+        docs = docs[offset : offset + k]
+    else:
+        docs = docs[:k]
+
     chunks = []
     citations = []
 
-    for i, doc in enumerate(docs[:k], 1):
+    for i, doc in enumerate(docs, 1):
         props = doc.properties
         text = props.get("text", "").strip()
         if not text:
@@ -90,6 +100,12 @@ def get_context(question: str, k: int = 5) -> str:
     return context
 
 
+def ensure_inline_citation_suffix(answer: str, citations: list) -> str:
+    if not citations or re.search(r"\[\d+\]", answer):
+        return ""
+    return "".join(f" [{cite['id']}]" for cite in citations)
+
+
 def format_citations(citations: list) -> str:
     if not citations:
         return ""
@@ -102,9 +118,16 @@ def format_citations(citations: list) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(question: str, context: str) -> str:
+def build_prompt(question: str, context: str, regenerate: bool = False) -> str:
+    variation = (
+        "Provide a fresh alternative answer with different wording than before. "
+        if regenerate
+        else ""
+    )
+
     if wants_list(question):
         prefix = (
+            f"{variation}"
             "Read the context and answer the question as a bullet list. "
             "Each item must start with a dash (-). "
             "Include all relevant items from the context.\n\n"
@@ -112,6 +135,7 @@ def build_prompt(question: str, context: str) -> str:
         )
     else:
         prefix = (
+            f"{variation}"
             "Answer the question using only the context below. "
             "Give a clear and complete answer. "
             "Cite sources inline using [1], [2], etc.\n\n"
@@ -169,7 +193,7 @@ def extract_implementation_groups(context: str) -> str:
     return "\n".join(bullets)
 
 
-def build_list_from_context(context: str, question: str) -> str:
+def build_list_from_context(context: str, question: str, shuffle: bool = False) -> str:
     q_lower = question.lower()
 
     if "implementation group" in q_lower:
@@ -207,7 +231,10 @@ def build_list_from_context(context: str, question: str) -> str:
                     seen.add(key)
                     bullets.append(f"- {line}")
 
-    return "\n".join(bullets[:12])
+    selected = bullets[:12]
+    if shuffle and len(selected) > 1:
+        random.shuffle(selected)
+    return "\n".join(selected)
 
 
 def has_bullet_list(text: str) -> bool:
@@ -225,26 +252,28 @@ def needs_list_fallback(question: str, answer: str) -> bool:
     return not has_bullet_list(text)
 
 
-def enhance_answer(question: str, answer: str, context: str) -> str:
+def enhance_answer(question: str, answer: str, context: str, regenerate: bool = False) -> str:
     answer = answer.strip()
 
     if needs_list_fallback(question, answer):
-        fallback = build_list_from_context(context, question)
+        fallback = build_list_from_context(context, question, shuffle=regenerate)
         if fallback:
             return fallback
 
     if not answer and context.strip():
-        fallback = build_list_from_context(context, question)
+        fallback = build_list_from_context(context, question, shuffle=regenerate)
         if fallback:
             return fallback
         sentences = [s.strip() for s in re.split(r"[.!?]\s+", context) if len(s.strip()) > 20]
         if sentences:
+            if regenerate and len(sentences) > 1:
+                return random.choice(sentences[:5])[:400]
             return sentences[0][:400]
 
     return answer
 
 
-def generate_answer(prompt: str) -> str:
+def generate_answer(prompt: str, regenerate: bool = False) -> str:
     inputs = tokenizer(
         prompt,
         return_tensors="pt",
@@ -252,17 +281,27 @@ def generate_answer(prompt: str) -> str:
         max_length=512,
     ).to(device)
 
-    outputs = model.generate(
+    generation_kwargs = {
         **inputs,
-        max_new_tokens=300 if "bullet list" in prompt else 256,
-        do_sample=False,
-        num_beams=1,
-    )
+        "max_new_tokens": 300 if "bullet list" in prompt else 256,
+        "num_beams": 1,
+    }
+
+    if regenerate:
+        generation_kwargs.update({
+            "do_sample": True,
+            "temperature": 0.9,
+            "top_p": 0.92,
+        })
+    else:
+        generation_kwargs["do_sample"] = False
+
+    outputs = model.generate(**generation_kwargs)
 
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 
-def ask_llm(question: str, context: str) -> str:
+def ask_llm(question: str, context: str, regenerate: bool = False) -> str:
     if is_greeting(question):
         return "Hi!"
 
@@ -273,8 +312,8 @@ def ask_llm(question: str, context: str) -> str:
             "(run: python ingest.py data/your-file.pdf)."
         )
 
-    raw = generate_answer(build_prompt(question, context))
-    return enhance_answer(question, raw, context)
+    raw = generate_answer(build_prompt(question, context, regenerate), regenerate)
+    return enhance_answer(question, raw, context, regenerate)
 
 
 def stream_text(text: str):
@@ -308,9 +347,10 @@ def stream_generate_answer(prompt: str):
     thread.join()
 
 
-def stream_ask_llm(question: str, context: str):
+def stream_ask_llm(question: str, context: str, regenerate: bool = False):
     if is_greeting(question):
-        yield from stream_text("Hi!")
+        greeting = random.choice(["Hi!", "Hello!", "Hey there!"]) if regenerate else "Hi!"
+        yield from stream_text(greeting)
         return
 
     if not context.strip():
@@ -321,6 +361,6 @@ def stream_ask_llm(question: str, context: str):
         )
         return
 
-    raw = generate_answer(build_prompt(question, context))
-    final = enhance_answer(question, raw, context)
+    raw = generate_answer(build_prompt(question, context, regenerate), regenerate)
+    final = enhance_answer(question, raw, context, regenerate)
     yield from stream_text(final)

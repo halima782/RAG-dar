@@ -21,7 +21,7 @@ export default function ResponseVersionPicker({
 
   return (
     <div
-      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-gray-100 border border-gray-200 text-xs text-gray-600"
+      className="inline-flex items-center gap-0.5 px-2 py-1 rounded-lg bg-slate-100 border border-slate-200/80 text-xs text-slate-600"
       aria-label={`Response version ${activeIndex + 1} of ${versionCount}`}
     >
       <button

@@ -7,7 +7,10 @@ export function useSourceViewer(citations = []) {
 
   const citationMap = useMemo(() => {
     const map = new Map();
-    citations.forEach((c) => map.set(c.id, c));
+    citations.forEach((c) => {
+      map.set(c.id, c);
+      map.set(Number(c.id), c);
+    });
     return map;
   }, [citations]);
 

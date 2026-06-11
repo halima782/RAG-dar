@@ -1,9 +1,35 @@
+import {
+  getDocumentViewerUrl,
+  openDocumentViewer,
+  printDocument,
+} from "../utils/documentUrls";
+
+function PrintIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+      />
+    </svg>
+  );
+}
+
 export default function SourceViewerModal({ citation, onClose }) {
   if (!citation) return null;
 
   const title = citation.title || citation.source;
-  const docUrl = citation.url || `/api/documents/${citation.source}`;
-  const fullUrl = docUrl.startsWith("http") ? docUrl : `${window.location.origin}${docUrl}`;
+  const viewerUrl = getDocumentViewerUrl(citation);
+
+  const handleOpenDocument = (event) => {
+    event.preventDefault();
+    openDocumentViewer(citation);
+  };
+
+  const handlePrint = () => {
+    printDocument(citation);
+  };
 
   return (
     <div
@@ -40,13 +66,16 @@ export default function SourceViewerModal({ citation, onClose }) {
               Document URL
             </p>
             <a
-              href={fullUrl}
+              href={viewerUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm text-blue-600 hover:text-blue-800 hover:underline break-all"
             >
-              {fullUrl}
+              {viewerUrl}
             </a>
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              Opens the PDF at page {citation.page || "1"} in a new tab.
+            </p>
           </div>
 
           <div>
@@ -65,14 +94,21 @@ export default function SourceViewerModal({ citation, onClose }) {
         </div>
 
         <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50 flex flex-col sm:flex-row gap-2 shrink-0">
-          <a
-            href={fullUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            onClick={handleOpenDocument}
             className="flex-1 py-2 text-sm font-medium text-center text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
           >
             Open document
-          </a>
+          </button>
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="flex-1 inline-flex items-center justify-center gap-2 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+          >
+            <PrintIcon />
+            Print
+          </button>
           <button
             onClick={onClose}
             className="flex-1 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"

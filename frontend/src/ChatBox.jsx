@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { streamChat } from "./api/chat";
 import { fetchMessages, mapApiMessage } from "./api/conversations";
 import { clearFeedback, submitFeedback } from "./api/feedback";
@@ -26,18 +27,33 @@ function ExportIcon() {
 
 const WELCOME_MESSAGE = {
   role: "ai",
-  text: "Hello! I am your local AI. Ask me anything about your documents.",
+  text: "Hello! I am your local AI assistant. Start with a suggested question or type your own.",
+  isWelcome: true,
 };
 
-export default function ChatBox({ conversationId, conversationTitle, onTitleUpdate }) {
+function ensureWelcomeMessage(messages) {
+  const withoutWelcome = messages.filter((message) => !message.isWelcome);
+  return [WELCOME_MESSAGE, ...withoutWelcome];
+}
+
+export default function ChatBox({
+  conversationId,
+  conversationTitle,
+  consumeInitialQuestion,
+  onTitleUpdate,
+  onReady,
+}) {
   const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(() => Boolean(conversationId));
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
   const [inputText, setInputText] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef(null);
+  const streamTargetRef = useRef(null);
+  const sendInFlightRef = useRef(false);
+  const autoSendAttemptedRef = useRef(false);
 
   const exportableCount = getExportableMessages(messages).length;
   const canExport = exportableCount > 0 && !isLoadingHistory && !isLoading;
@@ -59,20 +75,37 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
         const data = await fetchMessages(conversationId);
         if (cancelled) return;
 
-        if (data.length === 0) {
-          setMessages([WELCOME_MESSAGE]);
-        } else {
-          setMessages(data.map(mapApiMessage));
-        }
+        setMessages((prev) => {
+          if (prev.some((message) => message.isStreaming || message.isThinking)) {
+            return ensureWelcomeMessage(prev.filter((message) => !message.isWelcome));
+          }
+
+          if (data.length === 0) {
+            const hasLocalMessages = prev.some(
+              (message) =>
+                message.role === "user" ||
+                message.id ||
+                message.isStreaming ||
+                message.isThinking
+            );
+            return hasLocalMessages
+              ? ensureWelcomeMessage(prev.filter((message) => !message.isWelcome))
+              : [WELCOME_MESSAGE];
+          }
+
+          return ensureWelcomeMessage(data.map(mapApiMessage));
+        });
       } catch {
         if (!cancelled) {
-          setMessages([
-            {
-              role: "ai",
-              text: "Could not load conversation history. You can still send a new message.",
-              isError: true,
-            },
-          ]);
+          setMessages(
+            ensureWelcomeMessage([
+              {
+                role: "ai",
+                text: "Could not load conversation history. You can still send a new message.",
+                isError: true,
+              },
+            ])
+          );
         }
       } finally {
         if (!cancelled) {
@@ -88,22 +121,44 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
     };
   }, [conversationId]);
 
+  useEffect(() => {
+    autoSendAttemptedRef.current = false;
+    streamTargetRef.current = null;
+    sendInFlightRef.current = false;
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || isLoadingHistory) return;
+    onReady?.();
+  }, [conversationId, isLoadingHistory, onReady]);
+
+  const updateStreamTarget = useCallback((updater) => {
+    const targetId = streamTargetRef.current;
+    if (!targetId) return;
+
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (message.isWelcome) return message;
+        const isTarget =
+          message.clientId === targetId ||
+          (message.id && message.id === targetId);
+        if (!isTarget || message.role !== "ai") return message;
+        return updater(message);
+      })
+    );
+  }, []);
+
   const updateAiMessageAt = (aiIndex, updater) => {
     setMessages((prev) => {
       const next = [...prev];
-      if (aiIndex >= 0 && aiIndex < next.length && next[aiIndex].role === "ai") {
-        next[aiIndex] = updater(next[aiIndex]);
+      const message = next[aiIndex];
+      if (
+        message &&
+        message.role === "ai" &&
+        !message.isWelcome
+      ) {
+        next[aiIndex] = updater(message);
       }
-      return next;
-    });
-  };
-
-  const updateLastAiMessage = (updater) => {
-    setMessages((prev) => {
-      const lastIndex = prev.length - 1;
-      if (lastIndex < 0 || prev[lastIndex].role !== "ai") return prev;
-      const next = [...prev];
-      next[lastIndex] = updater(next[lastIndex]);
       return next;
     });
   };
@@ -115,15 +170,15 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
     return null;
   };
 
-  const runStream = async (question, aiIndex, { regenerate = false, replaceMessageId = null } = {}) => {
+  const runStream = async (question, { regenerate = false, replaceMessageId = null } = {}) => {
     await streamChat(conversationId, question, {
       regenerate,
       replaceMessageId,
       onThinking: () => {
-        updateAiMessageAt(aiIndex, (msg) => ({ ...msg, isThinking: true }));
+        updateStreamTarget((msg) => ({ ...msg, isThinking: true }));
       },
       onToken: (token) => {
-        updateAiMessageAt(aiIndex, (msg) => ({
+        updateStreamTarget((msg) => ({
           ...msg,
           text: msg.text + token,
           isThinking: false,
@@ -132,13 +187,13 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
         }));
       },
       onCitations: (citations) => {
-        updateAiMessageAt(aiIndex, (msg) => ({
+        updateStreamTarget((msg) => ({
           ...msg,
           citations,
         }));
       },
       onDone: (meta) => {
-        updateAiMessageAt(aiIndex, (msg) => ({
+        updateStreamTarget((msg) => ({
           ...msg,
           isThinking: false,
           isStreaming: false,
@@ -152,19 +207,23 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
             activeVersionIndex: meta.activeVersionIndex ?? 0,
           }),
         }));
+        streamTargetRef.current = null;
+        sendInFlightRef.current = false;
         setIsLoading(false);
         if (!regenerate) {
           onTitleUpdate?.(conversationId, question);
         }
       },
       onError: (error) => {
-        updateAiMessageAt(aiIndex, (msg) => ({
+        updateStreamTarget((msg) => ({
           ...msg,
           text: msg.text || `Sorry, something went wrong: ${error.message}`,
           isThinking: false,
           isStreaming: false,
           isError: true,
         }));
+        streamTargetRef.current = null;
+        sendInFlightRef.current = false;
         setIsLoading(false);
       },
     });
@@ -172,24 +231,42 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
 
   const handleSend = async (input) => {
     const question = input.trim();
-    if (!question || isLoading || !conversationId) return;
+    if (!question || isLoading || sendInFlightRef.current || !conversationId) return;
 
     enableAutoScroll();
 
-    const userMsg = { role: "user", text: question };
-    const aiPlaceholder = { role: "ai", text: "", isThinking: true };
+    const streamId = `stream-${Date.now()}`;
+    streamTargetRef.current = streamId;
+    sendInFlightRef.current = true;
 
-    let aiIndex = 0;
-    setMessages((prev) => {
-      aiIndex = prev.length + 1;
-      return [...prev, userMsg, aiPlaceholder];
+    const userMsg = { role: "user", text: question };
+    const aiPlaceholder = {
+      role: "ai",
+      text: "",
+      isThinking: true,
+      clientId: streamId,
+    };
+
+    flushSync(() => {
+      setMessages((prev) => [...prev, userMsg, aiPlaceholder]);
     });
+
     setInputText("");
     setIsEditing(false);
     setIsLoading(true);
 
-    await runStream(question, aiIndex);
+    await runStream(question);
   };
+
+  useEffect(() => {
+    if (!conversationId || isLoadingHistory || autoSendAttemptedRef.current) return;
+
+    const question = consumeInitialQuestion?.(conversationId);
+    if (!question) return;
+
+    autoSendAttemptedRef.current = true;
+    handleSend(question);
+  }, [conversationId, isLoadingHistory, consumeInitialQuestion]);
 
   const updateMessageFeedback = (messageIndex, feedbackEntry, remove = false) => {
     setMessages((prev) => {
@@ -289,10 +366,14 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
     enableAutoScroll();
     setIsLoading(true);
 
+    streamTargetRef.current = aiMessage.id ?? aiMessage.clientId ?? null;
+
     setMessages((prev) => {
       const next = [...prev];
+      const message = next[aiIndex];
+      if (!message || message.isWelcome) return prev;
       next[aiIndex] = {
-        ...next[aiIndex],
+        ...message,
         text: "",
         citations: [],
         isThinking: true,
@@ -302,7 +383,9 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
       return next;
     });
 
-    await runStream(question, aiIndex, {
+    sendInFlightRef.current = true;
+
+    await runStream(question, {
       regenerate: true,
       replaceMessageId: aiMessage.id,
     });
@@ -335,23 +418,26 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
 
   if (!conversationId) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500">
+      <div className="flex-1 flex items-center justify-center text-slate-500 chat-surface">
         Select or start a conversation
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-w-0 p-3 sm:p-4">
-      <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-gray-200 shrink-0">
-        <h2 className="text-sm sm:text-base font-semibold text-gray-800 truncate min-w-0">
-          {conversationTitle || "Chat"}
-        </h2>
+    <div className="flex-1 flex flex-col overflow-hidden min-w-0 chat-surface lg:rounded-tl-3xl">
+      <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 shrink-0 border-b border-slate-200/80 bg-white/50 backdrop-blur-sm">
+        <div className="min-w-0">
+          <h2 className="text-sm sm:text-base font-semibold text-slate-800 truncate tracking-tight">
+            {conversationTitle || "Chat"}
+          </h2>
+          <p className="text-[11px] text-slate-500 hidden sm:block">Ask anything about your documents</p>
+        </div>
         <button
           type="button"
           onClick={handleExportPdf}
           disabled={!canExport || isExporting}
-          className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs sm:text-sm font-medium text-gray-600 border border-gray-200 bg-white hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium text-slate-600 bg-white border border-slate-200/80 hover:border-indigo-200 hover:text-indigo-600 hover:bg-indigo-50/50 rounded-xl shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           title="Export conversation as PDF"
         >
           <ExportIcon />
@@ -361,7 +447,7 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
       </div>
 
       {exportError && (
-        <p className="text-xs text-red-600 mb-2 shrink-0" role="alert">
+        <p className="text-xs text-red-600 px-4 py-1 shrink-0" role="alert">
           {exportError}
         </p>
       )}
@@ -370,14 +456,14 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
         ref={containerRef}
         data-tour="chat-area"
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth min-h-0"
+        className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth min-h-0 px-3 sm:px-6 py-4"
       >
         {isLoadingHistory ? (
-          <p className="text-sm text-gray-500 text-center py-8">Loading messages...</p>
+          <p className="text-sm text-slate-500 text-center py-12 animate-shimmer">Loading messages...</p>
         ) : (
           messages.map((m, i) => (
             <Message
-              key={m.id ?? i}
+              key={m.id ?? m.clientId ?? i}
               role={m.role}
               messageId={m.id}
               text={m.text}
@@ -389,8 +475,10 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
               isStreaming={m.isStreaming}
               isError={m.isError}
               isLoading={isLoading}
+              isWelcome={m.isWelcome}
               canRegenerate={
                 m.role === "ai" &&
+                !m.isWelcome &&
                 Boolean(m.id) &&
                 Boolean(getPrecedingUserQuestion(messages, i))
               }
@@ -413,14 +501,16 @@ export default function ChatBox({ conversationId, conversationTitle, onTitleUpda
         )}
       </div>
 
-      <InputBox
-        ref={inputRef}
-        value={inputText}
-        onChange={setInputText}
-        onSend={handleSend}
-        disabled={isLoading || isLoadingHistory}
-        isEditing={isEditing}
-      />
+      <div className="shrink-0 px-3 sm:px-6 pb-3 sm:pb-4 pt-2 bg-gradient-to-t from-slate-100 to-transparent">
+        <InputBox
+          ref={inputRef}
+          value={inputText}
+          onChange={setInputText}
+          onSend={handleSend}
+          disabled={isLoading || isLoadingHistory}
+          isEditing={isEditing}
+        />
+      </div>
     </div>
   );
 }

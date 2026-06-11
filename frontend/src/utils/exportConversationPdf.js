@@ -1,4 +1,5 @@
 import { getReasonLabel } from "../constants/feedbackReasons";
+import { normalizeVersions } from "./messageVersions";
 
 const MARGIN = 16;
 const LINE_HEIGHT = 5.5;
@@ -49,10 +50,36 @@ export function getExportableMessages(messages) {
   return messages.filter(
     (message) =>
       message.text?.trim() &&
+      !message.isWelcome &&
       !message.isThinking &&
       !message.isStreaming &&
       (message.role === "user" || message.role === "ai")
   );
+}
+
+function getAiVersionBlocks(message) {
+  const { versions } = normalizeVersions({
+    versions: message.versions,
+    activeVersionIndex: message.activeVersionIndex,
+    text: message.text,
+    citations: message.citations,
+  });
+
+  return versions.map((version, index) => ({
+    index,
+    total: versions.length,
+    content: version.content ?? message.text ?? "",
+    citations: version.citations ?? message.citations ?? [],
+    feedback:
+      (message.feedback ?? []).find((entry) => entry.versionIndex === index) ?? null,
+  }));
+}
+
+function countAiVersions(messages) {
+  return getExportableMessages(messages).reduce((total, message) => {
+    if (message.role !== "ai") return total;
+    return total + getAiVersionBlocks(message).length;
+  }, 0);
 }
 
 export async function exportConversationPdf({ title, messages, exportedAt = new Date() }) {
@@ -95,53 +122,79 @@ export async function exportConversationPdf({ title, messages, exportedAt = new 
   });
   y += 2;
 
+  const aiVersionCount = countAiVersions(messages);
+
   writeLines(
     [
       `Exported: ${exportedAt.toLocaleString()}`,
       `Messages: ${exportable.length}`,
-    ],
+      aiVersionCount > 0 ? `AI response versions included: ${aiVersionCount}` : null,
+    ].filter(Boolean),
     { fontSize: 9, color: [107, 114, 128] }
   );
   y += 4;
 
-  exportable.forEach((message, index) => {
-    ensureSpace(LINE_HEIGHT * 4);
+  const addDivider = (light = false) => {
+    y += light ? 2 : 3;
+    ensureSpace(6);
+    doc.setDrawColor(light ? 241 : 229, light ? 245 : 231, light ? 249 : 235);
+    doc.line(MARGIN, y, pageWidth - MARGIN, y);
+    y += light ? 5 : 6;
+  };
 
-    const isUser = message.role === "user";
-    const label = isUser ? "You" : "AI Assistant";
-    const versionNote =
-      !isUser && message.versions?.length > 1
-        ? ` (version ${(message.activeVersionIndex ?? 0) + 1} of ${message.versions.length})`
-        : "";
+  const renderAiVersion = (block) => {
+    const label =
+      block.total > 1
+        ? `AI Assistant — Version ${block.index + 1} of ${block.total}`
+        : "AI Assistant";
 
-    writeLines([`${label}${versionNote}`], {
+    writeLines([label], {
       fontSize: 10,
       fontStyle: "bold",
-      color: isUser ? [37, 99, 235] : [17, 24, 39],
+      color: [17, 24, 39],
     });
 
-    writeLines([stripMarkdown(message.text)], { fontSize: 10 });
+    writeLines([stripMarkdown(block.content)], { fontSize: 10 });
 
-    if (!isUser && message.citations?.length) {
+    if (block.citations?.length) {
       y += 1;
-      writeLines(buildCitationBlock(message.citations), {
+      writeLines(buildCitationBlock(block.citations), {
         fontSize: 8,
         color: [75, 85, 99],
       });
     }
 
-    const feedbackLine = !isUser ? buildFeedbackLine(message.activeFeedback) : null;
+    const feedbackLine = buildFeedbackLine(block.feedback);
     if (feedbackLine) {
       y += 1;
       writeLines([feedbackLine], { fontSize: 8, color: [107, 114, 128] });
     }
+  };
+
+  exportable.forEach((message, index) => {
+    ensureSpace(LINE_HEIGHT * 4);
+
+    if (message.role === "user") {
+      writeLines(["You"], {
+        fontSize: 10,
+        fontStyle: "bold",
+        color: [37, 99, 235],
+      });
+      writeLines([stripMarkdown(message.text)], { fontSize: 10 });
+    } else {
+      const versionBlocks = getAiVersionBlocks(message);
+
+      versionBlocks.forEach((block, versionIndex) => {
+        renderAiVersion(block);
+
+        if (versionIndex < versionBlocks.length - 1) {
+          addDivider(true);
+        }
+      });
+    }
 
     if (index < exportable.length - 1) {
-      y += 3;
-      doc.setDrawColor(229, 231, 235);
-      ensureSpace(4);
-      doc.line(MARGIN, y, pageWidth - MARGIN, y);
-      y += 5;
+      addDivider(false);
     }
   });
 

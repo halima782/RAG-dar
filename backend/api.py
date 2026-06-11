@@ -150,7 +150,10 @@ def get_document(filename: str):
     return FileResponse(
         path,
         media_type="application/pdf",
-        filename=safe_name,
+        headers={
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+            "Cache-Control": "private, max-age=3600",
+        },
     )
 
 
@@ -320,6 +323,66 @@ def clear_feedback(message_id: str, version_index: int):
     return {"message": "Feedback removed"}
 
 
+def enrich_feedback_entry(entry: dict) -> dict:
+    payload = serialize_feedback(entry)
+
+    try:
+        conversation = conversations_collection.find_one({
+            "_id": ObjectId(entry["conversationId"]),
+        })
+    except Exception:
+        conversation = None
+
+    payload["conversationTitle"] = (
+        conversation.get("title", "Unknown chat") if conversation else "Deleted chat"
+    )
+
+    try:
+        message = messages_collection.find_one({
+            "_id": ObjectId(entry["messageId"]),
+            "sender": "ai",
+        })
+    except Exception:
+        message = None
+
+    snippet = ""
+    if message:
+        versions = get_message_versions(message)
+        version_index = entry.get("versionIndex", 0)
+        version_index = max(0, min(version_index, len(versions) - 1))
+        content = versions[version_index].get("content", message.get("content", ""))
+        snippet = content[:220] + ("..." if len(content) > 220 else "")
+
+    payload["messageSnippet"] = snippet
+    return payload
+
+
+@router.get("/api/feedback/dashboard")
+def get_feedback_dashboard():
+    entries = list(feedback_collection.find().sort("updatedAt", -1))
+
+    good = sum(1 for entry in entries if entry.get("rating") == "good")
+    bad = sum(1 for entry in entries if entry.get("rating") == "bad")
+    total = len(entries)
+
+    reason_breakdown: dict[str, int] = {}
+    for entry in entries:
+        if entry.get("rating") == "bad" and entry.get("reason"):
+            reason = entry["reason"]
+            reason_breakdown[reason] = reason_breakdown.get(reason, 0) + 1
+
+    return {
+        "stats": {
+            "total": total,
+            "good": good,
+            "bad": bad,
+            "satisfactionRate": round((good / total) * 100, 1) if total else 0,
+        },
+        "reasonBreakdown": reason_breakdown,
+        "entries": [enrich_feedback_entry(entry) for entry in entries],
+    }
+
+
 @router.get("/api/feedback")
 def get_feedback(conversation_id: str | None = None, message_id: str | None = None):
     query = {}
@@ -373,19 +436,29 @@ def chat_stream(request: ChatRequest):
         yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
 
         try:
-            from rag import get_rag_data, is_greeting, stream_ask_llm
+            from rag import ensure_inline_citation_suffix, get_rag_data, is_greeting, stream_ask_llm, stream_text
 
             greeting = is_greeting(question)
-            context, citations = ("", []) if greeting else get_rag_data(question)
-
-            full_answer = ""
-
-            for token in stream_ask_llm(question, context):
-                full_answer += token
-                yield f"data: {json.dumps({'token': token})}\n\n"
+            context, citations = (
+                ("", [])
+                if greeting
+                else get_rag_data(question, regenerate=request.regenerate)
+            )
 
             if citations:
                 yield f"data: {json.dumps({'citations': citations})}\n\n"
+
+            full_answer = ""
+
+            for token in stream_ask_llm(question, context, regenerate=request.regenerate):
+                full_answer += token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+
+            citation_suffix = ensure_inline_citation_suffix(full_answer, citations)
+            if citation_suffix:
+                for token in stream_text(citation_suffix):
+                    full_answer += token
+                    yield f"data: {json.dumps({'token': token})}\n\n"
 
             now = datetime.utcnow()
             new_version = {

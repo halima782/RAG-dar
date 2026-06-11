@@ -1,6 +1,7 @@
+import { getDocumentViewerUrl } from "../utils/documentUrls";
+
 function getDocumentUrl(citation) {
-  const docUrl = citation.url || `/api/documents/${citation.source}`;
-  return docUrl.startsWith("http") ? docUrl : `${window.location.origin}${docUrl}`;
+  return getDocumentViewerUrl(citation);
 }
 
 function buildMetadataSummary(citations) {
@@ -20,13 +21,24 @@ function buildMetadataSummary(citations) {
   };
 }
 
-function MetadataRow({ label, value }) {
+function MetadataRow({ label, value, href }) {
   if (!value) return null;
 
   return (
     <div className="flex flex-col sm:flex-row gap-0.5 sm:gap-2 text-[11px]">
-      <span className="shrink-0 sm:w-20 text-gray-400 font-medium">{label}</span>
-      <span className="text-gray-700 break-all min-w-0">{value}</span>
+      <span className="shrink-0 sm:w-20 text-slate-400 font-medium">{label}</span>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-indigo-600 hover:text-indigo-800 hover:underline break-all min-w-0"
+        >
+          {value}
+        </a>
+      ) : (
+        <span className="text-slate-700 break-all min-w-0">{value}</span>
+      )}
     </div>
   );
 }
@@ -44,7 +56,7 @@ export default function SourcesPanel({
   const panelId = `sources-panel-${citations[0]?.id ?? "default"}`;
 
   return (
-    <div className="mt-2 border border-gray-200 rounded-lg bg-white shadow-sm overflow-hidden">
+    <div className="mt-2 border border-slate-200/80 rounded-xl bg-slate-50/80 shadow-sm overflow-hidden">
       <button
         type="button"
         id={`${panelId}-toggle`}
@@ -123,7 +135,7 @@ export default function SourcesPanel({
                       <div className="mt-1 space-y-0.5">
                         <MetadataRow label="File" value={cite.source} />
                         {cite.page && <MetadataRow label="Page" value={String(cite.page)} />}
-                        <MetadataRow label="URL" value={docUrl} />
+                        <MetadataRow label="URL" value={docUrl} href={docUrl} />
                       </div>
                     </div>
                   </div>

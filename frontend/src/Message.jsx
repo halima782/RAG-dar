@@ -192,13 +192,13 @@ function ActionButton({ onClick, title, ariaLabel, active, activeClass, disabled
 
       disabled={disabled}
 
-      className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+      className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
 
         active
 
           ? activeClass
 
-          : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"
 
       }`}
 
@@ -239,6 +239,8 @@ export default function Message({
   isStreaming,
 
   isError,
+
+  isWelcome = false,
 
   isLoading,
 
@@ -286,7 +288,7 @@ export default function Message({
 
   const showSources =
 
-    !isUser && citations?.length > 0 && !isThinking && !isStreaming && !isError;
+    !isUser && !isWelcome && citations?.length > 0 && !isThinking && !isStreaming && !isError;
 
 
 
@@ -386,7 +388,7 @@ export default function Message({
 
   const showAiActions =
 
-    !isUser && (text || isError) && !isThinking && !isStreaming;
+    !isUser && !isWelcome && (text || isError) && !isThinking && !isStreaming;
 
 
 
@@ -394,21 +396,25 @@ export default function Message({
 
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} my-2 px-0.5`}>
 
-      <div className={`w-full max-w-[min(100%,42rem)] sm:max-w-[90%] md:max-w-[85%] lg:max-w-[75%] xl:max-w-[70%] ${isUser ? "group ml-auto" : ""}`}>
+      <div
+        className={`group flex flex-col gap-1.5 max-w-[min(100%,42rem)] sm:max-w-[88%] md:max-w-[80%] lg:max-w-[75%] ${
+          isUser ? "items-end ml-auto" : "items-start"
+        }`}
+      >
 
         <div
 
-          className={`p-2.5 sm:p-3 rounded-lg ${
+          className={`w-fit max-w-full p-3 sm:px-4 sm:py-3 ${
 
             isUser
 
-              ? "bg-blue-500 text-white"
+              ? "rounded-2xl rounded-br-md bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-500/20"
 
               : isError
 
-                ? "bg-red-100 text-red-900 border border-red-200"
+                ? "rounded-2xl rounded-bl-md bg-red-50 text-red-900 border border-red-200/80 shadow-sm"
 
-                : "bg-gray-200 text-black"
+                : "rounded-2xl rounded-bl-md bg-white text-slate-800 border border-slate-200/80 shadow-sm"
 
           }`}
 
@@ -446,19 +452,23 @@ export default function Message({
 
         {showSources && (
 
-          <SourcesPanel
+          <div className="w-full min-w-[min(100%,16rem)]">
 
-            citations={citations}
+            <SourcesPanel
 
-            highlightId={sourceViewer.highlightId}
+              citations={citations}
 
-            isOpen={sourceViewer.sourcesOpen}
+              highlightId={sourceViewer.highlightId}
 
-            onToggle={sourceViewer.toggleSources}
+              isOpen={sourceViewer.sourcesOpen}
 
-            onSourceClick={sourceViewer.openSource}
+              onToggle={sourceViewer.toggleSources}
 
-          />
+              onSourceClick={sourceViewer.openSource}
+
+            />
+
+          </div>
 
         )}
 
@@ -630,7 +640,7 @@ export default function Message({
 
                 disabled={isLoading}
 
-                className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 
               >
 

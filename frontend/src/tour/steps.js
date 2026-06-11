@@ -1,9 +1,18 @@
+import { APP_NAME } from "../constants/branding";
+
 export const TOUR_STEPS = [
   {
     target: null,
     title: "Welcome!",
     content:
-      "This quick tour will walk you through the main features of your local AI chatbot. It only takes a minute.",
+      `Welcome to ${APP_NAME}! This quick tour will walk you through the main features. It only takes a minute.`,
+  },
+  {
+    target: '[data-tour="suggested-questions"]',
+    title: "Suggested questions",
+    content:
+      "New here? Click any suggested question to start a chat — the AI will search your CIS PDF and stream an answer.",
+    placement: "top",
   },
   {
     target: '[data-tour="sidebar"]',

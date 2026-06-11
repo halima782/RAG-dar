@@ -5,8 +5,10 @@ import {
   fetchConversations,
 } from "./api/conversations";
 import ChatBox from "./ChatBox";
+import ChatLanding from "./components/ChatLanding";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ConversationSidebar from "./components/ConversationSidebar";
+import FeedbackDashboard from "./components/FeedbackDashboard";
 import GuidedTour from "./components/GuidedTour";
 import Header from "./Header";
 import { useGuidedTour } from "./hooks/useGuidedTour";
@@ -24,10 +26,46 @@ export default function App() {
   const [loadError, setLoadError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeView, setActiveView] = useState("chat");
+  const [chatReady, setChatReady] = useState(false);
+  const [landingReady, setLandingReady] = useState(false);
+  const [initialQuestion, setInitialQuestion] = useState(null);
+  const [isStartingChat, setIsStartingChat] = useState(false);
   const headerRef = useRef(null);
+  const sidebarOpenedForTour = useRef(false);
+  const autoSentChatsRef = useRef(new Set());
+
+  const handleTourAutoStart = useCallback(() => {
+    if (window.innerWidth < 1024) {
+      setSidebarOpen(true);
+      sidebarOpenedForTour.current = true;
+    }
+  }, []);
+
+  const closeTourSidebar = useCallback(() => {
+    if (sidebarOpenedForTour.current) {
+      setSidebarOpen(false);
+      sidebarOpenedForTour.current = false;
+    }
+  }, []);
+
+  const tourReady = !isLoadingList && !loadError && (activeId ? chatReady : landingReady);
+
   const { isOpen, startTour, closeTour, completeTour } = useGuidedTour({
-    ready: !isLoadingList,
+    autoStart: true,
+    ready: tourReady,
+    onAutoStart: handleTourAutoStart,
   });
+
+  const handleCloseTour = () => {
+    closeTour();
+    closeTourSidebar();
+  };
+
+  const handleCompleteTour = () => {
+    completeTour();
+    closeTourSidebar();
+  };
 
   const loadConversations = useCallback(async () => {
     const data = await fetchConversations();
@@ -41,21 +79,8 @@ export default function App() {
       setLoadError(null);
 
       try {
-        let data = await loadConversations();
-
-        if (data.length === 0) {
-          const created = await createConversation();
-          data = [
-            {
-              id: created.conversation_id,
-              title: created.title,
-              createdAt: new Date().toISOString(),
-            },
-          ];
-          setConversations(data);
-        }
-
-        setActiveId(data[0].id);
+        const data = await loadConversations();
+        setConversations(data);
       } catch (error) {
         console.error("Failed to load conversations:", error);
         setLoadError(error.message || "Could not connect to the backend.");
@@ -67,8 +92,32 @@ export default function App() {
     init();
   }, [loadConversations]);
 
+  const startChatWithQuestion = async (question) => {
+    setSidebarOpen(false);
+    setIsStartingChat(true);
+
+    try {
+      const created = await createConversation();
+      const newConv = {
+        id: created.conversation_id,
+        title: created.title,
+        createdAt: new Date().toISOString(),
+      };
+
+      setConversations((prev) => [newConv, ...prev]);
+      setInitialQuestion(question);
+      setActiveId(newConv.id);
+    } catch (error) {
+      console.error("Failed to start chat:", error);
+    } finally {
+      setIsStartingChat(false);
+    }
+  };
+
   const handleNewChat = async () => {
     setSidebarOpen(false);
+    setInitialQuestion(null);
+
     try {
       const created = await createConversation();
       const newConv = {
@@ -85,9 +134,15 @@ export default function App() {
   };
 
   const handleSelect = (id) => {
+    setInitialQuestion(null);
     setActiveId(id);
     setSidebarOpen(false);
   };
+
+  useEffect(() => {
+    setChatReady(false);
+    setLandingReady(false);
+  }, [activeId]);
 
   useEffect(() => {
     const updateHeaderOffset = () => {
@@ -136,25 +191,34 @@ export default function App() {
       const remaining = conversations.filter((c) => c.id !== id);
 
       if (remaining.length === 0) {
-        const created = await createConversation();
-        const newConv = {
-          id: created.conversation_id,
-          title: created.title,
-          createdAt: new Date().toISOString(),
-        };
-        setConversations([newConv]);
-        setActiveId(newConv.id);
+        setConversations([]);
+        setActiveId(null);
+        setInitialQuestion(null);
         return;
       }
 
       setConversations(remaining);
       if (activeId === id) {
+        setInitialQuestion(null);
         setActiveId(remaining[0].id);
       }
     } catch (error) {
       console.error("Failed to delete conversation:", error);
     }
   };
+
+  const consumeInitialQuestion = useCallback(
+    (conversationId) => {
+      if (!initialQuestion || !conversationId) return null;
+      if (autoSentChatsRef.current.has(conversationId)) return null;
+
+      autoSentChatsRef.current.add(conversationId);
+      const question = initialQuestion;
+      setInitialQuestion(null);
+      return question;
+    },
+    [initialQuestion]
+  );
 
   const handleTitleUpdate = (conversationId, firstMessage) => {
     setConversations((prev) =>
@@ -175,9 +239,15 @@ export default function App() {
           onStartTour={startTour}
           sidebarOpen={sidebarOpen}
           onMenuToggle={() => setSidebarOpen((open) => !open)}
+          activeView={activeView}
+          onOpenDashboard={() => {
+            setSidebarOpen(false);
+            setActiveView("dashboard");
+          }}
+          onOpenChat={() => setActiveView("chat")}
         />
       </div>
-      <GuidedTour isOpen={isOpen} onClose={closeTour} onComplete={completeTour} />
+      <GuidedTour isOpen={isOpen} onClose={handleCloseTour} onComplete={handleCompleteTour} />
       <ConfirmDialog
         isOpen={!!deleteTarget}
         title={`Delete "${deleteTarget?.title}"?`}
@@ -188,45 +258,59 @@ export default function App() {
         onCancel={handleDeleteCancel}
       />
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
-        {sidebarOpen && (
+        {activeView === "chat" && sidebarOpen && (
           <button
             type="button"
-            className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+            className="fixed inset-0 z-30 bg-slate-950/60 backdrop-blur-sm lg:hidden"
             style={{ top: "var(--header-offset, 0px)" }}
             onClick={() => setSidebarOpen(false)}
             aria-label="Close chat history"
           />
         )}
 
-        <ConversationSidebar
-          conversations={conversations}
-          activeId={activeId}
-          isLoading={isLoadingList}
-          isOpen={sidebarOpen}
-          onSelect={handleSelect}
-          onNew={handleNewChat}
-          onDelete={handleDeleteRequest}
-          onClose={() => setSidebarOpen(false)}
-        />
-        {loadError ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 text-center min-w-0">
-            <p className="text-red-600 font-medium mb-2">Cannot connect to backend</p>
-            <p className="text-gray-600 text-sm max-w-md mb-4">{loadError}</p>
-            <p className="text-gray-500 text-sm">
-              Start the backend:{" "}
-              <code className="block sm:inline mt-2 sm:mt-0 bg-gray-100 px-2 py-1 rounded text-xs sm:text-sm break-all">
-                uvicorn api:app --reload --port 8000
-              </code>
-            </p>
+        {activeView === "chat" && (
+          <ConversationSidebar
+            conversations={conversations}
+            activeId={activeId}
+            isLoading={isLoadingList}
+            isOpen={sidebarOpen}
+            onSelect={handleSelect}
+            onNew={handleNewChat}
+            onDelete={handleDeleteRequest}
+            onClose={() => setSidebarOpen(false)}
+          />
+        )}
+        {activeView === "dashboard" ? (
+          <FeedbackDashboard onBackToChat={() => setActiveView("chat")} />
+        ) : loadError ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 text-center min-w-0 chat-surface">
+            <div className="glass-panel rounded-2xl border border-white/60 shadow-xl p-8 max-w-md">
+              <p className="text-red-600 font-semibold mb-2">Cannot connect to backend</p>
+              <p className="text-slate-600 text-sm mb-4">{loadError}</p>
+              <p className="text-slate-500 text-sm">
+                Start the backend:{" "}
+                <code className="block sm:inline mt-2 sm:mt-0 bg-slate-100 text-slate-800 px-3 py-1.5 rounded-lg text-xs sm:text-sm break-all font-mono">
+                  uvicorn api:app --reload --port 8000
+                </code>
+              </p>
+            </div>
           </div>
-        ) : (
+        ) : activeId ? (
           <ChatBox
             key={activeId}
             conversationId={activeId}
             conversationTitle={
               conversations.find((conversation) => conversation.id === activeId)?.title
             }
+            consumeInitialQuestion={consumeInitialQuestion}
             onTitleUpdate={handleTitleUpdate}
+            onReady={() => setChatReady(true)}
+          />
+        ) : (
+          <ChatLanding
+            onSuggestedQuestion={startChatWithQuestion}
+            onReady={() => setLandingReady(true)}
+            isStarting={isStartingChat}
           />
         )}
       </div>
