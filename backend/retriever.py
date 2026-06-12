@@ -1,5 +1,6 @@
 import weaviate
 from langchain_huggingface import HuggingFaceEmbeddings
+from weaviate.classes.query import MetadataQuery
 
 embedding_model = HuggingFaceEmbeddings(
     model_name="BAAI/bge-small-en-v1.5"
@@ -23,7 +24,8 @@ def retrieve(query, k=5):
 
     response = collection.query.near_vector(
         near_vector=vector,
-        limit=k
+        limit=k,
+        return_metadata=MetadataQuery(distance=True),
     )
 
     return response.objects

@@ -27,6 +27,11 @@ LIST_TRIGGERS = (
     "types of", "implementation group", "give me", "show me",
 )
 
+# Weaviate cosine distance: lower = more similar. CIS questions ~0.02–0.20; off-topic ~0.45+.
+RELEVANCE_DISTANCE_THRESHOLD = 0.38
+
+UNKNOWN_ANSWER = "I don't know."
+
 
 def is_greeting(question: str) -> bool:
     text = question.strip().lower().rstrip("!.?, ")
@@ -44,7 +49,43 @@ def expand_query(question: str) -> str:
         return f"{question} Implementation Group IG1 IG2 IG3 CIS Controls enterprise"
     if wants_list(question):
         return f"{question} list items CIS Controls"
+    if "cybersecurity" in q or "security posture" in q or "help enterprises" in q:
+        return f"{question} CIS Controls safeguards benefits enterprise security"
+    if "safeguard" in q or "prioritize" in q:
+        return f"{question} CIS Controls safeguards implementation priority"
     return question
+
+
+def _top_distance(docs) -> float | None:
+    if not docs:
+        return None
+    metadata = getattr(docs[0], "metadata", None)
+    return getattr(metadata, "distance", None) if metadata else None
+
+
+def is_retrieval_relevant(question: str, docs) -> bool:
+    if not docs:
+        return False
+
+    distance = _top_distance(docs)
+    if distance is not None and distance > RELEVANCE_DISTANCE_THRESHOLD:
+        return False
+
+    keywords = _question_keywords(question)
+    if not keywords:
+        return distance is None or distance <= RELEVANCE_DISTANCE_THRESHOLD
+
+    combined_text = " ".join(
+        doc.properties.get("text", "").lower() for doc in docs[:5]
+    )
+    matches = sum(1 for keyword in keywords if keyword in combined_text)
+    if matches == 0:
+        return False
+
+    if distance is not None and distance > 0.22 and matches < 2:
+        return False
+
+    return True
 
 
 def get_rag_data(question: str, k: int = 5, regenerate: bool = False):
@@ -53,6 +94,12 @@ def get_rag_data(question: str, k: int = 5, regenerate: bool = False):
 
     fetch_k = k + 6 if regenerate else k
     docs = retrieve(expand_query(question), k=fetch_k)
+
+    if not docs:
+        return "", [], "no_documents"
+
+    if not is_retrieval_relevant(question, docs):
+        return "", [], "out_of_scope"
 
     if regenerate and len(docs) > k:
         offset = random.randint(0, min(3, len(docs) - k))
@@ -92,16 +139,20 @@ def get_rag_data(question: str, k: int = 5, regenerate: bool = False):
         })
 
     context = "\n\n".join(chunks)
-    return context, citations
+    return context, citations, "ok"
 
 
 def get_context(question: str, k: int = 5) -> str:
-    context, _ = get_rag_data(question, k=k)
+    context, _, _ = get_rag_data(question, k=k)
     return context
 
 
+def no_context_message(retrieval_status: str) -> str:
+    return UNKNOWN_ANSWER
+
+
 def ensure_inline_citation_suffix(answer: str, citations: list) -> str:
-    if not citations or re.search(r"\[\d+\]", answer):
+    if not citations or is_weak_answer(answer) or re.search(r"\[\d+\]", answer):
         return ""
     return "".join(f" [{cite['id']}]" for cite in citations)
 
@@ -252,6 +303,71 @@ def needs_list_fallback(question: str, answer: str) -> bool:
     return not has_bullet_list(text)
 
 
+WEAK_ANSWERS = {".", "-", "...", "n/a", "na", "none", "unknown", "yes", "no"}
+
+
+def is_weak_answer(answer: str) -> bool:
+    text = answer.strip().lower()
+    if not text:
+        return True
+    if text in WEAK_ANSWERS:
+        return True
+    if len(text) < 25:
+        return True
+    return False
+
+
+def _question_keywords(question: str) -> list[str]:
+    stopwords = {
+        "what", "which", "when", "where", "does", "help", "about", "from",
+        "with", "that", "this", "their", "your", "into", "through", "using",
+        "give", "tell", "show", "list", "name", "please", "should", "would",
+        "could", "have", "been", "being", "were", "they", "them", "than",
+        "then", "also", "just", "only", "very", "more", "most", "some",
+        "such", "many", "much", "like", "make", "made",
+    }
+    return [
+        word
+        for word in re.findall(r"[a-z0-9]{4,}", question.lower())
+        if word not in stopwords
+    ]
+
+
+def _split_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [part.strip() for part in parts if len(part.strip()) > 30]
+
+
+def build_answer_from_context(context: str, question: str, regenerate: bool = False) -> str:
+    keywords = _question_keywords(question)
+    sentences = _split_sentences(context)
+    if not sentences:
+        return ""
+
+    scored = []
+    for sentence in sentences:
+        lower = sentence.lower()
+        score = sum(1 for keyword in keywords if keyword in lower)
+        if "cis" in question.lower() and "cis" in lower:
+            score += 2
+        if score > 0:
+            scored.append((score, sentence))
+
+    if not scored:
+        scored = [(0, sentence) for sentence in sentences[:6]]
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    selected = [sentence for _, sentence in scored[:4]]
+
+    if regenerate and len(selected) > 1:
+        random.shuffle(selected)
+
+    if wants_list(question) or len(selected) > 1:
+        return "\n".join(f"- {sentence}" for sentence in selected)
+
+    return selected[0][:500]
+
+
 def enhance_answer(question: str, answer: str, context: str, regenerate: bool = False) -> str:
     answer = answer.strip()
 
@@ -260,15 +376,25 @@ def enhance_answer(question: str, answer: str, context: str, regenerate: bool = 
         if fallback:
             return fallback
 
-    if not answer and context.strip():
+    if is_weak_answer(answer) and context.strip():
+        fallback = build_answer_from_context(context, question, regenerate)
+        if fallback:
+            return fallback
+
         fallback = build_list_from_context(context, question, shuffle=regenerate)
         if fallback:
             return fallback
-        sentences = [s.strip() for s in re.split(r"[.!?]\s+", context) if len(s.strip()) > 20]
+
+        sentences = _split_sentences(context)
         if sentences:
             if regenerate and len(sentences) > 1:
                 return random.choice(sentences[:5])[:400]
             return sentences[0][:400]
+
+        return UNKNOWN_ANSWER
+
+    if is_weak_answer(answer):
+        return UNKNOWN_ANSWER
 
     return answer
 
@@ -284,7 +410,8 @@ def generate_answer(prompt: str, regenerate: bool = False) -> str:
     generation_kwargs = {
         **inputs,
         "max_new_tokens": 300 if "bullet list" in prompt else 256,
-        "num_beams": 1,
+        "num_beams": 4 if not regenerate else 1,
+        "early_stopping": True,
     }
 
     if regenerate:
@@ -306,11 +433,7 @@ def ask_llm(question: str, context: str, regenerate: bool = False) -> str:
         return "Hi!"
 
     if not context.strip():
-        return (
-            "I could not find relevant information in your documents. "
-            "Please make sure Weaviate is running and you have ingested a PDF "
-            "(run: python ingest.py data/your-file.pdf)."
-        )
+        return no_context_message("no_documents")
 
     raw = generate_answer(build_prompt(question, context, regenerate), regenerate)
     return enhance_answer(question, raw, context, regenerate)
@@ -347,18 +470,19 @@ def stream_generate_answer(prompt: str):
     thread.join()
 
 
-def stream_ask_llm(question: str, context: str, regenerate: bool = False):
+def stream_ask_llm(
+    question: str,
+    context: str,
+    regenerate: bool = False,
+    retrieval_status: str = "ok",
+):
     if is_greeting(question):
         greeting = random.choice(["Hi!", "Hello!", "Hey there!"]) if regenerate else "Hi!"
         yield from stream_text(greeting)
         return
 
     if not context.strip():
-        yield (
-            "I could not find relevant information in your documents. "
-            "Please make sure Weaviate is running and you have ingested a PDF "
-            "(run: python ingest.py data/your-file.pdf)."
-        )
+        yield no_context_message(retrieval_status)
         return
 
     raw = generate_answer(build_prompt(question, context, regenerate), regenerate)

@@ -439,18 +439,25 @@ def chat_stream(request: ChatRequest):
             from rag import ensure_inline_citation_suffix, get_rag_data, is_greeting, stream_ask_llm, stream_text
 
             greeting = is_greeting(question)
-            context, citations = (
-                ("", [])
-                if greeting
-                else get_rag_data(question, regenerate=request.regenerate)
-            )
+            if greeting:
+                context, citations, retrieval_status = "", [], "ok"
+            else:
+                context, citations, retrieval_status = get_rag_data(
+                    question,
+                    regenerate=request.regenerate,
+                )
 
             if citations:
                 yield f"data: {json.dumps({'citations': citations})}\n\n"
 
             full_answer = ""
 
-            for token in stream_ask_llm(question, context, regenerate=request.regenerate):
+            for token in stream_ask_llm(
+                question,
+                context,
+                regenerate=request.regenerate,
+                retrieval_status=retrieval_status,
+            ):
                 full_answer += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
